@@ -1,0 +1,19 @@
+[package]
+name = "hw_ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
+syntect.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+# Local dependencies
+hw_hal = { path = "../hw_hal" }

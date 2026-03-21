@@ -1,0 +1,49 @@
+[workspace]
+members = [
+    "hw_ide_core",
+    "hw_hal",
+    "hw_ui",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# UI Framework
+egui = "0.27"
+eframe = "0.27"
+egui_extras = "0.27"
+
+# Serial Port Communication
+serialport = "4.3"
+
+# Hardware Detection
+rusb = "0.9"
+
+# Async Runtime
+tokio = { version = "1.0", features = ["full"] }
+tokio-serial = "5.4"
+
+# Utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Code Editor
+syntect = "5.2"
+
+# File System
+notify = "6.1"
+
+# Configuration
+config = "0.14"
+toml = "0.8"
+dirs = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,34 @@
+[package]
+name = "hw_ide_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Workspace dependencies
+egui.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
+serialport.workspace = true
+rusb.workspace = true
+tokio.workspace = true
+tokio-serial.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+syntect.workspace = true
+notify.workspace = true
+config.workspace = true
+toml.workspace = true
+dirs.workspace = true
+chrono.workspace = true
+
+# Local dependencies
+hw_hal = { path = "../hw_hal" }
+hw_ui = { path = "../hw_ui" }
+
+[[bin]]
+name = "hw_ide"
+path = "src/main.rs"

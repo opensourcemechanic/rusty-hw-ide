@@ -1,0 +1,22 @@
+[package]
+name = "hw_hal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serialport.workspace = true
+rusb.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+toml.workspace = true
+dirs.workspace = true
+
+[features]
+default = ["esp8266", "esp32", "avr"]
+esp8266 = []
+esp32 = []
+avr = []

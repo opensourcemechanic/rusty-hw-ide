@@ -1,0 +1,19 @@
+# Rust
+/target/
+Cargo.lock
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug files
+debug_ports.rs
+test_serial.rs
+
+# WSL
+*.tmp
