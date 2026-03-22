@@ -42,6 +42,16 @@ toml = "0.8"
 dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 
+# External tool detection
+which = "4.4"
+
+# File path handling
+glob = "0.3"
+
+# File system utilities
+opener = "0.7"
+rfd = "0.14"
+
 [profile.release]
 opt-level = 3
 lto = true

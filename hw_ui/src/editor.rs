@@ -97,42 +97,38 @@ impl CodeEditor {
         // Editor area
         let frame = card_frame(1.0);
         frame.show(ui, |ui| {
-            // Calculate line numbers width
-            let line_count = self.code.lines().count();
-            let line_numbers_width = if self.show_line_numbers {
-                format!("{}", line_count).len() as f32 * 8.0 + 16.0
-            } else {
-                0.0
-            };
+            ui.horizontal_top(|ui| {
+                // Show line numbers if enabled
+                if self.show_line_numbers {
+                    let line_numbers = self.generate_line_numbers();
+                    let line_count = self.code.lines().count();
+                    let line_numbers_width = format!("{}", line_count).len() as f32 * 8.0 + 16.0;
+                    
+                    ui.add(
+                        egui::TextEdit::multiline(&mut line_numbers.clone())
+                            .desired_width(line_numbers_width)
+                            .font(egui::TextStyle::Monospace)
+                            .interactive(false)
+                            .frame(false)
+                    );
+                    
+                    ui.separator();
+                }
 
-            // Main editor
-            let available_width = ui.available_width() - line_numbers_width;
-            let desired_height = ui.available_height() - 20.0;
-
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut self.code)
-                    .desired_width(available_width)
-                    .code_editor()
-                    .lock_focus(true)
-            );
-
-            // Handle cursor position and selection
-            if response.changed() {
-                self.modified = true;
-                changed = true;
-            }
-
-            // Show line numbers if enabled
-            if self.show_line_numbers {
-                let line_numbers = self.generate_line_numbers();
-                ui.painter().text(
-                    egui::pos2(ui.cursor().min.x + 8.0, ui.cursor().min.y + 8.0),
-                    egui::Align2::LEFT_TOP,
-                    line_numbers,
-                    egui::FontId::monospace(self.font_size),
-                    theme.text_secondary,
+                // Main editor
+                let response = ui.add(
+                    egui::TextEdit::multiline(&mut self.code)
+                        .desired_width(ui.available_width())
+                        .code_editor()
+                        .lock_focus(true)
                 );
-            }
+
+                // Handle cursor position and selection
+                if response.changed() {
+                    self.modified = true;
+                    changed = true;
+                }
+            });
         });
 
         // Status bar

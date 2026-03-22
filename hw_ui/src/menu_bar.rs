@@ -10,6 +10,12 @@ pub struct MenuBar {
     pub show_new_project_dialog: bool,
     pub show_open_project_dialog: bool,
     pub show_hardware_detection: bool,
+    pub compile_clicked: bool,
+    pub upload_clicked: bool,
+    pub upload_config_clicked: bool,
+    pub new_file_clicked: bool,
+    pub open_file_clicked: bool,
+    pub save_file_clicked: bool,
 }
 
 impl MenuBar {
@@ -20,6 +26,12 @@ impl MenuBar {
             show_new_project_dialog: false,
             show_open_project_dialog: false,
             show_hardware_detection: false,
+            compile_clicked: false,
+            upload_clicked: false,
+            upload_config_clicked: false,
+            new_file_clicked: false,
+            open_file_clicked: false,
+            save_file_clicked: false,
         }
     }
 
@@ -39,18 +51,33 @@ impl MenuBar {
                 ui.separator();
                 
                 if ui.button("New File").clicked() {
+                    self.new_file_clicked = true;
                     ui.close_menu();
                 }
                 
                 if ui.button("Open File...").clicked() {
+                    self.open_file_clicked = true;
                     ui.close_menu();
                 }
                 
                 if ui.button("Save").clicked() {
+                    self.save_file_clicked = true;
                     ui.close_menu();
                 }
                 
                 if ui.button("Save As...").clicked() {
+                    ui.close_menu();
+                }
+                
+                ui.separator();
+                
+                if ui.button("Compile (Ctrl+B)").clicked() {
+                    self.compile_clicked = true;
+                    ui.close_menu();
+                }
+                
+                if ui.button("Upload (Ctrl+U)").clicked() {
+                    self.upload_clicked = true;
                     ui.close_menu();
                 }
                 
@@ -125,14 +152,18 @@ impl MenuBar {
 
             ui.menu_button("Build", |ui| {
                 if ui.button("Compile").clicked() {
+                    self.compile_clicked = true;
                     ui.close_menu();
                 }
                 
                 if ui.button("Upload").clicked() {
+                    self.upload_clicked = true;
                     ui.close_menu();
                 }
                 
                 if ui.button("Compile & Upload").clicked() {
+                    self.compile_clicked = true;
+                    self.upload_clicked = true;
                     ui.close_menu();
                 }
                 
@@ -142,7 +173,8 @@ impl MenuBar {
                     ui.close_menu();
                 }
                 
-                if ui.button("Build Configuration...").clicked() {
+                if ui.button("Upload Configuration...").clicked() {
+                    self.upload_config_clicked = true;
                     ui.close_menu();
                 }
             });
@@ -341,5 +373,13 @@ impl MenuBar {
 
         self.show_preferences = open;
         result
+    }
+    
+    pub fn reset_action_flags(&mut self) {
+        self.compile_clicked = false;
+        self.upload_clicked = false;
+        self.new_file_clicked = false;
+        self.open_file_clicked = false;
+        self.save_file_clicked = false;
     }
 }
