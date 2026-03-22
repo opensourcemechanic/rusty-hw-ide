@@ -6,15 +6,15 @@ use std::time::Duration;
 pub fn test_all_ports() {
     println!("=== Testing All Serial Ports ===");
     
-    // Test all ttyS ports with different baud rates
-    let ports = vec![
-        "/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3", 
-        "/dev/ttyS4", "/dev/ttyS5", "/dev/ttyS6", "/dev/ttyS7",
+    // Test some common port names manually
+    let common_ports = vec![
+        // Windows COM ports
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM10",
     ];
     
     let baud_rates = vec![9600, 19200, 38400, 57600, 115200];
     
-    for port in ports {
+    for port in common_ports {
         if Path::new(port).exists() {
             println!("\nTesting {}:", port);
             

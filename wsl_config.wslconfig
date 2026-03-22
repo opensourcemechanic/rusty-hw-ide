@@ -1,0 +1,11 @@
+# Enable USB passthrough for WSL
+[interop]
+enabled=true
+appendWindowsPath=true
+
+[usbip]
+enabled=true
+
+[wsl2]
+# Enable USB interop
+usbip=true

@@ -8,14 +8,25 @@ use serialport::SerialPortInfo;
 pub fn detect_hardware() -> Result<Vec<HardwareInfo>> {
     let mut hardware_list = Vec::new();
     
+    println!("=== Hardware Detection Debug ===");
+    
     // First try the serialport library detection
     if let Ok(ports) = serialport::available_ports() {
-        for port in ports {
+        println!("Found {} ports from serialport library", ports.len());
+        for (i, port) in ports.iter().enumerate() {
+            println!("Analyzing port {}: {}", i + 1, port.port_name);
             if let Some(hw_info) = analyze_port(&port) {
+                println!("✓ Detected: {} on {}", hw_info.name, hw_info.port);
                 hardware_list.push(hw_info);
+            } else {
+                println!("✗ No hardware detected for {}", port.port_name);
             }
         }
+    } else {
+        println!("Error: Could not get serial ports");
     }
+    
+    println!("Total hardware detected: {}", hardware_list.len());
     
     // Then manually check WSL COM ports (ttyS*) that might not be detected by serialport
     for i in 0..8 {
@@ -60,11 +71,32 @@ fn analyze_wsl_port(port_name: &str) -> Option<HardwareInfo> {
 /// Analyzes a serial port to determine if it's a supported microcontroller
 pub fn analyze_port(port_info: &SerialPortInfo) -> Option<HardwareInfo> {
     let port_name = &port_info.port_name;
+    println!("  Analyzing port: {}", port_name);
     
-    // Try to identify by port name patterns (simplified approach)
-    // In a real implementation, you might use rusb or other USB libraries
-    // to get VID/PID information
+    // Try to identify by USB VID/PID and port name patterns
+    if let serialport::SerialPortType::UsbPort(usb_info) = &port_info.port_type {
+        println!("  USB Port detected: VID={:04X}, PID={:04X}", usb_info.vid, usb_info.pid);
+        if let Some((platform, device_name)) = identify_known_device(port_name, usb_info.vid, usb_info.pid) {
+            println!("  ✓ Identified as: {} ({})", device_name, platform);
+            return Some(HardwareInfo {
+                name: device_name,
+                platform: platform.clone(),
+                port: port_name.clone(),
+                baud_rate: get_default_baud_rate(&platform),
+                chip_id: Some(format!("{:04X}:{:04X}", usb_info.vid, usb_info.pid)),
+                description: Some(format!("{} - {}", usb_info.product.as_ref().unwrap_or(&"Unknown".to_string()), 
+                                         usb_info.manufacturer.as_ref().unwrap_or(&"Unknown".to_string()))),
+            });
+        } else {
+            println!("  ✗ identify_known_device returned None");
+        }
+    } else {
+        println!("  Not a USB port: {:?}", port_info.port_type);
+    }
+    
+    // Fallback to port name pattern detection
     if let Some(platform) = identify_by_port_name(port_name) {
+        println!("  ✓ Identified by port name: {}", platform);
         return Some(HardwareInfo {
             name: format!("Unknown {} Device", platform),
             platform: platform.clone(),
@@ -73,44 +105,75 @@ pub fn analyze_port(port_info: &SerialPortInfo) -> Option<HardwareInfo> {
             chip_id: None,
             description: Some(port_info.port_name.clone()),
         });
+    } else {
+        println!("  ✗ identify_by_port_name returned None");
     }
 
-    // Try to identify known devices by port name patterns
-    if let Some((platform, name)) = identify_known_device(port_name) {
-        return Some(HardwareInfo {
-            name,
-            platform: platform.clone(),
-            port: port_name.clone(),
-            baud_rate: get_default_baud_rate(&platform),
-            chip_id: None,
-            description: Some(port_info.port_name.clone()),
-        });
-    }
-
+    println!("  ✗ No identification possible for {}", port_name);
     None
 }
 
-/// Identifies known devices by port name patterns
-fn identify_known_device(port_name: &str) -> Option<(Platform, String)> {
+/// Identifies known devices by port name patterns and USB VID/PID
+fn identify_known_device(port_name: &str, vid: u16, pid: u16) -> Option<(Platform, String)> {
     let port_lower = port_name.to_lowercase();
+    println!("    identify_known_device: port={}, VID={:04X}, PID={:04X}", port_name, vid, pid);
     
-    // WSL COM port forwarding - assume Arduino/AVR for ttyS ports
-    if port_lower.contains("ttys") {
+    // Windows COM ports - identify by VID/PID
+    if port_lower.contains("com") {
+        println!("    Windows COM port detected");
+        match (vid, pid) {
+            // FTDI devices (common for Arduino clones)
+            (0x0403, 0x6001) => {
+                println!("    ✓ Matched FTDI Arduino");
+                Some((Platform::AVR, "Arduino (FTDI)".to_string()))
+            },
+            // Silicon Labs CP210x (common for ESP32/ESP8266)
+            (0x10c4, 0xea60) => {
+                println!("    ✓ Matched WeMos D1 Mini Pro");
+                Some((Platform::ESP8266, "WeMos D1 Mini Pro".to_string()))
+            },
+            // CH340/CH341 (common Arduino clones)
+            (0x1a86, 0x7523) => {
+                println!("    ✓ Matched CH340 Arduino");
+                Some((Platform::AVR, "Arduino (CH340)".to_string()))
+            },
+            // Other common patterns
+            (0x10c4, _) => {
+                println!("    ✓ Matched Silicon Labs (ESP32)");
+                Some((Platform::ESP32, "ESP32 Dev Board".to_string()))
+            },
+            (0x0403, _) => {
+                println!("    ✓ Matched FTDI Device");
+                Some((Platform::AVR, "FTDI Device".to_string()))
+            },
+            _ => {
+                println!("    ✗ No VID/PID match found");
+                Some((Platform::AVR, "Unknown USB Device".to_string()))
+            },
+        }
+    }
+    // Linux/macOS patterns
+    else if port_lower.contains("ttys") {
+        println!("    Linux/WSL ttyS port detected");
         Some((Platform::AVR, "Arduino/AVR Device (WSL)".to_string()))
     }
     // WeMos D1 Mini patterns
     else if port_lower.contains("ch340") || port_lower.contains("wchusb") {
+        println!("    CH340/WCHUSB device detected");
         Some((Platform::ESP8266, "WeMos D1 Mini".to_string()))
     }
     // ESP32 patterns
     else if port_lower.contains("cp2102") || port_lower.contains("silabs") {
+        println!("    CP2102/Silabs device detected");
         Some((Platform::ESP32, "ESP32 Dev Board".to_string()))
     }
     // Arduino patterns
     else if port_lower.contains("acm") || port_lower.contains("usbmodem") {
+        println!("    ACM/USB modem device detected");
         Some((Platform::AVR, "Arduino Board".to_string()))
     }
     else {
+        println!("    ✗ No port pattern match");
         None
     }
 }

@@ -34,11 +34,17 @@ impl SerialMonitor {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, theme: &AppTheme, connection: &mut SerialConnection) {
-        // Header with controls
+        // Header label only
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.label(header_text("Serial Monitor"));
-            
+        });
+
+        ui.add_space(8.0);
+
+        // Controls section (moved down)
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Baud rate selector
                 ui.label("Baud:");
@@ -58,7 +64,7 @@ impl SerialMonitor {
                 
                 ui.separator();
                 
-                // Options
+                // Options checkboxes
                 ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
                 ui.checkbox(&mut self.show_timestamps, "Timestamps");
                 ui.checkbox(&mut self.hex_mode, "Hex");
@@ -78,7 +84,8 @@ impl SerialMonitor {
                 };
                 
                 if ui.button(button_text).clicked() {
-                    if self.enabled {
+                    if connection.is_connected() {
+                        connection.disconnect().ok();
                         self.enabled = false;
                     } else {
                         self.enabled = true;
@@ -89,90 +96,53 @@ impl SerialMonitor {
 
         ui.add_space(8.0);
 
-        // Filter input
-        if !self.filter_text.is_empty() || ui.input(|i| i.key_pressed(egui::Key::F)) {
-            ui.horizontal(|ui| {
-                ui.label("Filter:");
-                ui.text_edit_singleline(&mut self.filter_text);
-                if ui.button("Clear").clicked() {
-                    self.filter_text.clear();
-                }
-            });
-            ui.add_space(4.0);
-        }
-
-        // Serial output area
+        // Serial output area (moved down further)
         let frame = card_frame(1.0);
         frame.show(ui, |ui| {
-            let buffer = self.buffer.lock().unwrap();
+            // Output area
+            let buffer_data = self.buffer.lock().unwrap();
+            let output_text = if self.hex_mode {
+                let text = buffer_data.join("\n");
+                self.format_as_hex(&text)
+            } else {
+                buffer_data.join("\n")
+            };
             
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .stick_to_bottom(self.auto_scroll)
                 .show(ui, |ui| {
-                    let mut line_count = 0;
-                    
-                    for line in buffer.iter().rev() {
-                        // Apply filter
-                        if !self.filter_text.is_empty() && !line.to_lowercase().contains(&self.filter_text.to_lowercase()) {
-                            continue;
-                        }
-                        
-                        line_count += 1;
-                        if line_count > self.max_lines {
-                            break;
-                        }
-                        
-                        // Format line
-                        let display_line = if self.hex_mode {
-                            self.format_as_hex(line)
-                        } else {
-                            line.clone()
-                        };
-                        
-                        // Add timestamp if enabled
-                        let final_line = if self.show_timestamps {
-                            format!("[{}] {}", self.get_timestamp(), display_line)
-                        } else {
-                            display_line
-                        };
-                        
-                        ui.label(crate::body_text(&final_line));
-                    }
+                    ui.label(output_text);
                 });
         });
 
-        // Input area
-        ui.add_space(4.0);
-        
-        let frame = card_frame(1.0);
-        frame.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Send:");
-                
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.input_buffer)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("Enter command to send...")
-                );
-                
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if !self.input_buffer.is_empty() {
-                        if let Err(e) = self.send_command(connection, &self.input_buffer.clone()) {
-                            tracing::error!("Failed to send command: {}", e);
-                        }
-                        self.input_buffer.clear();
-                        response.request_focus();
-                    }
-                }
-                
-                if ui.button("Send").clicked() && !self.input_buffer.is_empty() {
-                    if let Err(e) = self.send_command(connection, &self.input_buffer.clone()) {
-                        tracing::error!("Failed to send command: {}", e);
+        ui.add_space(8.0);
+
+        // Send input area
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label("Send:");
+            let response = ui.text_edit_singleline(&mut self.input_buffer);
+            
+            if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let text = self.input_buffer.trim();
+                if !text.is_empty() {
+                    if let Err(e) = connection.write_data(text.as_bytes()) {
+                        eprintln!("Failed to send data: {}", e);
                     }
                     self.input_buffer.clear();
                 }
-            });
+            }
+            
+            if ui.button("Send").clicked() {
+                let text = self.input_buffer.trim();
+                if !text.is_empty() {
+                    if let Err(e) = connection.write_data(text.as_bytes()) {
+                        eprintln!("Failed to send data: {}", e);
+                    }
+                    self.input_buffer.clear();
+                }
+            }
         });
     }
 

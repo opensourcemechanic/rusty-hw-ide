@@ -34,6 +34,8 @@ pub struct HardwareIDE {
 
 impl HardwareIDE {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        tracing::info!("=== HardwareIDE::new() called ===");
+        
         // Configure tracing
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
@@ -63,9 +65,12 @@ impl HardwareIDE {
         app.load_blink_example();
 
         // Detect hardware on startup
-        if let Ok(hardware) = app.hardware_panel.connection.detect() {
+        tracing::info!("=== About to call detect_hardware() ===");
+        if let Ok(hardware) = hw_hal::detection::detect_hardware() {
             app.available_hardware = hardware;
             info!("Detected {} hardware devices on startup", app.available_hardware.len());
+        } else {
+            tracing::error!("detect_hardware() returned error");
         }
 
         app
@@ -118,8 +123,8 @@ void loop() {
         let window = egui::Window::new("Select Hardware")
             .collapsible(false)
             .resizable(true)
-            .default_width(600.0)
-            .default_height(400.0)
+            .default_width(400.0)  // Even smaller
+            .default_height(500.0)  // Increased height for better layout
             .open(&mut self.show_hardware_dialog);
 
         window.show(ctx, |ui| {
@@ -145,49 +150,52 @@ void loop() {
                         for (i, hardware) in self.available_hardware.iter().enumerate() {
                             let frame = card_frame(1.0);
                             frame.show(ui, |ui| {
+                                // Platform icon and name
                                 ui.horizontal(|ui| {
-                                    // Platform icon and name
                                     ui.label(
                                         egui::RichText::new(format!("{} {}", 
                                             platform_icon(&hardware.platform), 
                                             hardware.name))
-                                            .size(16.0)
+                                            .size(14.0)
                                             .color(platform_color(&hardware.platform))
                                             .strong()
                                     );
-
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.button("Connect").clicked() {
-                                            match self.hardware_panel.connect_to_hardware(hardware) {
-                                                Ok(_) => {
-                                                    self.status_bar.success(&format!("Connected to {}", hardware.name));
-                                                    self.status_bar.set_hardware_info(Some(hardware.clone()));
-                                                    should_close = true;
-                                                }
-                                                Err(e) => {
-                                                    self.status_bar.error(&format!("Failed to connect: {}", e));
-                                                }
-                                            }
-                                        }
-                                    });
                                 });
 
                                 ui.add_space(4.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(hw_ui::body_text(&format!("Port: {}", hardware.port)));
-                                    ui.label(hw_ui::body_text(&format!("Baud: {}", hardware.baud_rate)));
-                                });
+                                
+                                // Hardware info with better word wrapping
+                                ui.label(hw_ui::body_text(&format!("Port: {}", hardware.port)));
+                                ui.label(hw_ui::body_text(&format!("Baud: {}", hardware.baud_rate)));
 
                                 if let Some(ref chip_id) = hardware.chip_id {
-                                    ui.label(hw_ui::body_text(&format!("Chip ID: {}", chip_id)));
+                                    ui.label(hw_ui::body_text(&format!("Chip: {}", chip_id)));
                                 }
 
                                 if let Some(ref description) = hardware.description {
-                                    ui.label(hw_ui::body_text(&format!("Description: {}", description)));
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(hw_ui::body_text(description));
+                                    });
+                                }
+
+                                ui.add_space(6.0);
+                                
+                                // Connect button on its own line
+                                if ui.button("Connect").clicked() {
+                                    match self.hardware_panel.connect_to_hardware(hardware) {
+                                        Ok(_) => {
+                                            self.status_bar.success(&format!("Connected to {}", hardware.name));
+                                            self.status_bar.set_hardware_info(Some(hardware.clone()));
+                                            should_close = true;
+                                        }
+                                        Err(e) => {
+                                            self.status_bar.error(&format!("Failed to connect: {}", e));
+                                        }
+                                    }
                                 }
                             });
 
-                            ui.add_space(8.0);
+                            ui.add_space(4.0);
                         }
                     });
 
@@ -328,40 +336,33 @@ impl eframe::App for HardwareIDE {
                 }
             }
 
-            // Main layout with tabs
-            ui.horizontal(|ui| {
-                // Left panel - Hardware
-                ui.vertical(|ui| {
-                    ui.heading("Hardware");
-                    ui.add_space(8.0);
-                    
+            // Main layout with fixed panel widths
+            // Left panel - Hardware (fixed 300px width)
+            egui::SidePanel::left("hardware_panel")
+                .resizable(false)
+                .exact_width(300.0)
+                .show(ctx, |ui| {
                     if let Some(hardware) = self.hardware_panel.show(ui, &self.theme) {
                         self.available_hardware = hardware;
                         self.status_bar.success(&format!("Found {} devices", self.available_hardware.len()));
+                        // Open hardware selection dialog when hardware is detected
+                        self.show_hardware_dialog = true;
                     }
                 });
-
-                ui.separator();
-
-                // Center panel - Code Editor
-                ui.vertical(|ui| {
-                    ui.heading("Code Editor");
-                    ui.add_space(8.0);
-                    
-                    if self.code_editor.show(ui, &self.theme) {
-                        self.status_bar.warning("Code modified - remember to save");
-                    }
-                });
-
-                ui.separator();
-
-                // Right panel - Serial Monitor
-                ui.vertical(|ui| {
-                    ui.heading("Serial Monitor");
-                    ui.add_space(8.0);
-                    
+            
+            // Right panel - Serial Monitor (fixed 300px width)
+            egui::SidePanel::right("serial_panel")
+                .resizable(false)
+                .exact_width(300.0)
+                .show(ctx, |ui| {
                     self.serial_monitor.show(ui, &self.theme, &mut self.hardware_panel.connection);
                 });
+
+            // Center panel - Code Editor (takes remaining space)
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if self.code_editor.show(ui, &self.theme) {
+                    self.status_bar.warning("Code modified - remember to save");
+                }
             });
 
             // Update serial monitor in background
@@ -385,11 +386,13 @@ impl eframe::App for HardwareIDE {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    tracing::info!("=== MAIN FUNCTION CALLED ===");
+    
     // Configure window options
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 600.0])
+            .with_inner_size([2000.0, 900.0])  // Even more width
+            .with_min_inner_size([1600.0, 700.0]) // Larger minimum size
             .with_title("Hardware-Aware IDE"),
         ..Default::default()
     };

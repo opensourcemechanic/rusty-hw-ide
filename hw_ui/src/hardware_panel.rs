@@ -33,10 +33,17 @@ impl HardwarePanel {
     pub fn show(&mut self, ui: &mut egui::Ui, theme: &AppTheme) -> Option<Vec<HardwareInfo>> {
         let mut detect_hardware = None;
 
-        // Header
+        // Header label only
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.label(header_text("Hardware Connection"));
+        });
+
+        ui.add_space(8.0);
+
+        // Controls section (moved down)
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Refresh").clicked() {
                     detect_hardware = Some(());
@@ -48,11 +55,14 @@ impl HardwarePanel {
 
         ui.add_space(8.0);
 
-        // Hardware selection
+        // Hardware selection content (moved down further)
         if let Some(ref hardware) = self.selected_hardware {
             self.show_connected_hardware(ui, theme);
         } else {
-            self.show_hardware_selection(ui, theme);
+            // Handle detection results from show_hardware_selection
+            if let Some(hardware) = self.show_hardware_selection(ui, theme) {
+                return Some(hardware);
+            }
         }
 
         // Configuration panel
@@ -60,6 +70,7 @@ impl HardwarePanel {
             self.show_configuration_panel(ui, theme);
         }
 
+        // Handle refresh button detection
         detect_hardware.map(|_| self.detect_hardware())
     }
 
@@ -109,8 +120,10 @@ impl HardwarePanel {
         });
     }
 
-    fn show_hardware_selection(&self, ui: &mut egui::Ui, theme: &AppTheme) {
+    fn show_hardware_selection(&mut self, ui: &mut egui::Ui, theme: &AppTheme) -> Option<Vec<HardwareInfo>> {
         ui.add_space(4.0);
+        
+        let mut detection_triggered = false;
         
         let frame = card_frame(1.0);
         frame.show(ui, |ui| {
@@ -118,12 +131,19 @@ impl HardwarePanel {
             ui.add_space(8.0);
             
             if ui.button("🔍 Detect Hardware").clicked() {
-                // Detection action handled in main app
+                detection_triggered = true;
             }
             
             ui.add_space(8.0);
             ui.label(crate::body_text("Connect your microcontroller and click detect to find available devices."));
         });
+        
+        // Return detection results if triggered
+        if detection_triggered {
+            Some(self.detect_hardware())
+        } else {
+            None
+        }
     }
 
     fn show_configuration_panel(&mut self, ui: &mut egui::Ui, theme: &AppTheme) {
@@ -177,7 +197,7 @@ impl HardwarePanel {
     }
 
     fn detect_hardware(&mut self) -> Vec<HardwareInfo> {
-        match self.connection.detect() {
+        match hw_hal::detection::detect_hardware() {
             Ok(hardware) => {
                 tracing::info!("Detected {} hardware devices", hardware.len());
                 hardware

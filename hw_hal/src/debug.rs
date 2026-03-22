@@ -42,9 +42,8 @@ pub fn debug_serial_ports() {
     
     // Test some common port names manually
     let common_ports = vec![
-        "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2",
-        "/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2",
-        "/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3", "/dev/ttyS4", "/dev/ttyS5", "/dev/ttyS6", "/dev/ttyS7",
+        // Windows COM ports
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM10",
     ];
     
     println!("Testing common port names:");

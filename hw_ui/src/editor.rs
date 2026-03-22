@@ -65,10 +65,16 @@ impl CodeEditor {
             }
             
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Language selector
+                // Options with proper spacing
+                ui.checkbox(&mut self.show_line_numbers, "Line Numbers");
+                ui.checkbox(&mut self.word_wrap, "Word Wrap");
+                
+                ui.separator();
+                
+                // Language selector with more width
                 egui::ComboBox::from_label("")
                     .selected_text(self.language.to_uppercase())
-                    .width(60.0)
+                    .width(80.0)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.language, "cpp".to_string(), "C++");
                         ui.selectable_value(&mut self.language, "c".to_string(), "C");
@@ -76,12 +82,6 @@ impl CodeEditor {
                         ui.selectable_value(&mut self.language, "python".to_string(), "Python");
                         ui.selectable_value(&mut self.language, "text".to_string(), "Plain Text");
                     });
-                
-                ui.separator();
-                
-                // Options
-                ui.checkbox(&mut self.show_line_numbers, "Line Numbers");
-                ui.checkbox(&mut self.word_wrap, "Word Wrap");
                 
                 ui.separator();
                 
