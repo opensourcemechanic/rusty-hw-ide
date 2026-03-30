@@ -49,13 +49,13 @@ impl CodeEditor {
         
         // Editor header
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
+            ui.add_space(4.0);
             
             // File name or editor label
             let label_text = if let Some(ref path) = self.file_path {
                 format!("📄 {}", std::path::Path::new(path).file_name().unwrap().to_string_lossy())
             } else {
-                format!("📝 New File ({})", self.language.to_uppercase())
+                format!("📝 {}", self.language.to_uppercase())
             };
             
             if self.modified {
@@ -64,32 +64,24 @@ impl CodeEditor {
                 ui.label(header_text(&label_text));
             }
             
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Options with proper spacing
-                ui.checkbox(&mut self.show_line_numbers, "Line Numbers");
-                ui.checkbox(&mut self.word_wrap, "Word Wrap");
-                
-                ui.separator();
-                
-                // Language selector with more width
-                egui::ComboBox::from_label("")
-                    .selected_text(self.language.to_uppercase())
-                    .width(80.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.language, "cpp".to_string(), "C++");
-                        ui.selectable_value(&mut self.language, "c".to_string(), "C");
-                        ui.selectable_value(&mut self.language, "rust".to_string(), "Rust");
-                        ui.selectable_value(&mut self.language, "python".to_string(), "Python");
-                        ui.selectable_value(&mut self.language, "text".to_string(), "Plain Text");
-                    });
-                
-                ui.separator();
-                
-                // Actions
-                if ui.button("💾 Save").clicked() {
-                    changed = true;
-                }
-            });
+            ui.separator();
+            
+            // Language selector (compact)
+            egui::ComboBox::from_label("")
+                .selected_text(&self.language.to_uppercase())
+                .width(50.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.language, "cpp".to_string(), "C++");
+                    ui.selectable_value(&mut self.language, "c".to_string(), "C");
+                    ui.selectable_value(&mut self.language, "rust".to_string(), "Rust");
+                    ui.selectable_value(&mut self.language, "python".to_string(), "Python");
+                });
+            
+            ui.separator();
+            
+            // Compact checkboxes
+            ui.checkbox(&mut self.word_wrap, "Wrap");
+            ui.checkbox(&mut self.show_line_numbers, "Lines");
         });
 
         ui.add_space(8.0);

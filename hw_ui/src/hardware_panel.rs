@@ -14,6 +14,8 @@ pub struct HardwarePanel {
     pub auto_detect: bool,
     pub detection_running: bool,
     pub last_detection_time: Option<std::time::Instant>,
+    pub disconnect_clicked: bool,
+    pub configure_clicked: bool,
 }
 
 impl HardwarePanel {
@@ -27,6 +29,8 @@ impl HardwarePanel {
             auto_detect: true,
             detection_running: false,
             last_detection_time: None,
+            disconnect_clicked: false,
+            configure_clicked: false,
         }
     }
 
@@ -56,7 +60,7 @@ impl HardwarePanel {
         ui.add_space(8.0);
 
         // Hardware selection content (moved down further)
-        if let Some(ref hardware) = self.selected_hardware {
+        if let Some(ref _hardware) = self.selected_hardware {
             self.show_connected_hardware(ui, theme);
         } else {
             // Handle detection results from show_hardware_selection
@@ -73,8 +77,17 @@ impl HardwarePanel {
         // Handle refresh button detection
         detect_hardware.map(|_| self.detect_hardware())
     }
+    
+    pub fn reset_action_flags(&mut self) {
+        self.disconnect_clicked = false;
+        self.configure_clicked = false;
+    }
+    
+    pub fn is_connected(&self) -> bool {
+        self.connection.is_connected()
+    }
 
-    fn show_connected_hardware(&self, ui: &mut egui::Ui, theme: &AppTheme) {
+    fn show_connected_hardware(&mut self, ui: &mut egui::Ui, theme: &AppTheme) {
         let hardware = self.selected_hardware.as_ref().unwrap();
         
         ui.add_space(4.0);
@@ -94,10 +107,10 @@ impl HardwarePanel {
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
-                        // Disconnect action handled in main app
+                        self.disconnect_clicked = true;
                     }
                     if ui.button("Configure").clicked() {
-                        // Show configuration
+                        self.configure_clicked = true;
                     }
                 });
             });
@@ -221,10 +234,6 @@ impl HardwarePanel {
         self.connection.disconnect()?;
         self.selected_hardware = None;
         Ok(())
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.connection.is_connected()
     }
 
     pub fn get_connected_hardware(&self) -> Option<&HardwareInfo> {

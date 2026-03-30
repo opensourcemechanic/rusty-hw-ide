@@ -33,65 +33,51 @@ impl SerialMonitor {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &AppTheme, connection: &mut SerialConnection) {
-        // Header label only
+    pub fn show(&mut self, ui: &mut egui::Ui, _theme: &AppTheme, connection: &mut SerialConnection) {
+        // Controls bar
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.label(header_text("Serial Monitor"));
-        });
-
-        ui.add_space(8.0);
-
-        // Controls section (moved down)
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Baud rate selector
-                ui.label("Baud:");
-                egui::ComboBox::from_label("")
-                    .selected_text(format!("{}", self.baud_rate))
-                    .width(80.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.baud_rate, 9600, "9600");
-                        ui.selectable_value(&mut self.baud_rate, 19200, "19200");
-                        ui.selectable_value(&mut self.baud_rate, 38400, "38400");
-                        ui.selectable_value(&mut self.baud_rate, 57600, "57600");
-                        ui.selectable_value(&mut self.baud_rate, 115200, "115200");
-                        ui.selectable_value(&mut self.baud_rate, 230400, "230400");
-                        ui.selectable_value(&mut self.baud_rate, 460800, "460800");
-                        ui.selectable_value(&mut self.baud_rate, 921600, "921600");
-                    });
-                
-                ui.separator();
-                
-                // Options checkboxes
-                ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
-                ui.checkbox(&mut self.show_timestamps, "Timestamps");
-                ui.checkbox(&mut self.hex_mode, "Hex");
-                
-                ui.separator();
-                
-                // Clear button
-                if ui.button("Clear").clicked() {
-                    self.clear_buffer();
-                }
-                
-                // Connect/Disconnect button
-                let button_text = if self.enabled && connection.is_connected() {
-                    "⏹ Disconnect"
+            ui.add_space(4.0);
+            
+            // Connect/Disconnect button (leftmost)
+            let button_text = if self.enabled && connection.is_connected() {
+                "⏹ Disconnect"
+            } else {
+                "▶ Connect"
+            };
+            
+            if ui.button(button_text).clicked() {
+                if connection.is_connected() {
+                    connection.disconnect().ok();
+                    self.enabled = false;
                 } else {
-                    "▶ Connect"
-                };
-                
-                if ui.button(button_text).clicked() {
-                    if connection.is_connected() {
-                        connection.disconnect().ok();
-                        self.enabled = false;
-                    } else {
-                        self.enabled = true;
-                    }
+                    self.enabled = true;
                 }
-            });
+            }
+            
+            ui.separator();
+            
+            // Baud rate selector (moved after Connect)
+            ui.label("Baud:");
+            egui::ComboBox::from_label("")
+                .selected_text(format!("{}", self.baud_rate))
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.baud_rate, 9600, "9600");
+                    ui.selectable_value(&mut self.baud_rate, 19200, "19200");
+                    ui.selectable_value(&mut self.baud_rate, 38400, "38400");
+                    ui.selectable_value(&mut self.baud_rate, 57600, "57600");
+                    ui.selectable_value(&mut self.baud_rate, 115200, "115200");
+                    ui.selectable_value(&mut self.baud_rate, 230400, "230400");
+                    ui.selectable_value(&mut self.baud_rate, 460800, "460800");
+                    ui.selectable_value(&mut self.baud_rate, 921600, "921600");
+                });
+            
+            ui.separator();
+            
+            // Clear button (moved after Baud)
+            if ui.button("Clear").clicked() {
+                self.clear_buffer();
+            }
         });
 
         ui.add_space(8.0);

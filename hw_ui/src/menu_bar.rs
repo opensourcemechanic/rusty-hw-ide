@@ -16,6 +16,7 @@ pub struct MenuBar {
     pub new_file_clicked: bool,
     pub open_file_clicked: bool,
     pub save_file_clicked: bool,
+    pub toggle_serial_monitor: bool,
 }
 
 impl MenuBar {
@@ -32,6 +33,7 @@ impl MenuBar {
             new_file_clicked: false,
             open_file_clicked: false,
             save_file_clicked: false,
+            toggle_serial_monitor: false,
         }
     }
 
@@ -181,6 +183,7 @@ impl MenuBar {
 
             ui.menu_button("Tools", |ui| {
                 if ui.button("Serial Monitor").clicked() {
+                    self.toggle_serial_monitor = true;
                     ui.close_menu();
                 }
                 
@@ -378,6 +381,8 @@ impl MenuBar {
     pub fn reset_action_flags(&mut self) {
         self.compile_clicked = false;
         self.upload_clicked = false;
+        self.upload_config_clicked = false;
+        self.toggle_serial_monitor = false;
         self.new_file_clicked = false;
         self.open_file_clicked = false;
         self.save_file_clicked = false;

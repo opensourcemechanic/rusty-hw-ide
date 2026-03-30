@@ -46,7 +46,7 @@ fn find_arduino_core() -> Result<(PathBuf, PathBuf), String> {
 }
 
 /// Compile Arduino code using official Arduino core
-pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
+pub fn compile_avr(source_code: &str, build_dir: &Path, target_chip: TargetChip, clock_speed: ClockSpeed) -> CompilationResult {
     let mut output = String::new();
     
     // Find Arduino core libraries
@@ -62,7 +62,23 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
     };
     
     output.push_str(&format!("Using Arduino core: {}\n", core_path.display()));
-    output.push_str(&format!("Using variant: {}\n\n", variant_path.display()));
+    output.push_str(&format!("Using variant: {}\n", variant_path.display()));
+    
+    // Get MCU-specific settings
+    let (mcu, f_cpu, arduino_board) = match target_chip {
+        TargetChip::ATmega328P => ("atmega328p", "16000000L", "ARDUINO_AVR_UNO"),
+        TargetChip::ATtiny85 => {
+            let freq = match clock_speed {
+                ClockSpeed::MHz1 => "1000000L",
+                ClockSpeed::MHz8 => "8000000L", 
+                ClockSpeed::MHz16 => "16000000L",
+            };
+            ("attiny85", freq, "ARDUINO_AVR_ATTINY85")
+        }
+    };
+    
+    output.push_str(&format!("Target MCU: {}\n", mcu));
+    output.push_str(&format!("CPU Frequency: {} Hz\n\n", f_cpu));
     
     // Create source file with Arduino.h include
     let source_file = build_dir.join("sketch.cpp");
@@ -99,6 +115,12 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
     
     // First compile user sketch
     output.push_str("Compiling sketch.cpp...\n");
+    let sketch_mcu_arg = format!("-mmcu={}", mcu);
+    let sketch_f_cpu_arg = format!("-DF_CPU={}", f_cpu);
+    let sketch_board_arg = format!("-D{}", arduino_board);
+    let core_include_arg = format!("-I{}", core_path.to_str().unwrap());
+    let variant_include_arg = format!("-I{}", variant_path.to_str().unwrap());
+    
     let sketch_compile = Command::new("avr-g++")
         .args(&[
             "-c",
@@ -113,13 +135,13 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
             "-fno-threadsafe-statics",
             "-MMD",
             "-flto",
-            "-mmcu=atmega328p",
-            "-DF_CPU=16000000L",
+            &sketch_mcu_arg,
+            &sketch_f_cpu_arg,
             "-DARDUINO=10819",
-            "-DARDUINO_AVR_UNO",
+            &sketch_board_arg,
             "-DARDUINO_ARCH_AVR",
-            &format!("-I{}", core_path.to_str().unwrap()),
-            &format!("-I{}", variant_path.to_str().unwrap()),
+            &core_include_arg,
+            &variant_include_arg,
             source_file.to_str().unwrap(),
             "-o",
             object_files[0].to_str().unwrap(),
@@ -154,6 +176,10 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
         let is_cpp = core_file.extension().and_then(|e| e.to_str()) == Some("cpp");
         let compiler = if is_cpp { "avr-g++" } else { "avr-gcc" };
         
+        let mcu_arg = format!("-mmcu={}", mcu);
+        let f_cpu_arg = format!("-DF_CPU={}", f_cpu);
+        let board_arg = format!("-D{}", arduino_board);
+        
         let mut args = vec![
             "-c",
             "-g",
@@ -163,10 +189,10 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
             "-fdata-sections",
             "-MMD",
             "-flto",
-            "-mmcu=atmega328p",
-            "-DF_CPU=16000000L",
+            &mcu_arg,
+            &f_cpu_arg,
             "-DARDUINO=10819",
-            "-DARDUINO_AVR_UNO",
+            &board_arg,
             "-DARDUINO_ARCH_AVR",
         ];
         
@@ -182,8 +208,10 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
         let core_include = format!("-I{}", core_path.to_str().unwrap());
         let variant_include = format!("-I{}", variant_path.to_str().unwrap());
         
-        args.push(&core_include);
-        args.push(&variant_include);
+        args.extend(&[
+            core_include.as_str(),
+            variant_include.as_str(),
+        ]);
         args.push(core_file.to_str().unwrap());
         args.push("-o");
         args.push(obj_file.to_str().unwrap());
@@ -201,6 +229,7 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
     
     // Link all object files
     output.push_str("=== Linking ===\n");
+    let mcu_link_arg = format!("-mmcu={}", mcu);
     let mut link_args = vec![
         "-w",
         "-Os",
@@ -208,7 +237,7 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
         "-flto",
         "-fuse-linker-plugin",
         "-Wl,--gc-sections",
-        "-mmcu=atmega328p",
+        &mcu_link_arg,
     ];
     
     let obj_paths: Vec<String> = object_files.iter()
@@ -282,8 +311,9 @@ pub fn compile_avr(source_code: &str, build_dir: &Path) -> CompilationResult {
     
     // Get size info
     output.push_str("\n=== Program Size ===\n");
+    let size_mcu_arg = format!("--mcu={}", mcu);
     if let Ok(size_result) = Command::new("avr-size")
-        .args(&["-C", "--mcu=atmega328p", elf_file.to_str().unwrap()])
+        .args(&["-C", &size_mcu_arg, elf_file.to_str().unwrap()])
         .output()
     {
         output.push_str(&String::from_utf8_lossy(&size_result.stdout));
@@ -306,6 +336,13 @@ pub enum TargetChip {
 }
 
 #[derive(Debug, Clone)]
+pub enum ClockSpeed {
+    MHz1,              // 1MHz internal
+    MHz8,              // 8MHz internal  
+    MHz16,             // 16MHz external/ATmega328P
+}
+
+#[derive(Debug, Clone)]
 pub enum BoardType {
     ArduinoUno,        // Standard Arduino Uno with bootloader
     ArduinoNanoISP,    // Arduino Nano configured as ISP programmer
@@ -315,8 +352,10 @@ pub enum BoardType {
 pub struct UploadConfig {
     pub programmer: String,
     pub target_chip: TargetChip,
+    pub clock_speed: ClockSpeed,
     pub baud_rate: u32,
     pub port: String,
+    pub board_type: BoardType,
 }
 
 impl UploadConfig {
@@ -325,18 +364,22 @@ impl UploadConfig {
         if port.contains("COM8") {
             // COM8 is Arduino Nano as ISP for ATtiny85
             Self {
-                programmer: "stk500v1".to_string(),
+                programmer: "stk500v1".to_string(),  // Try stk500v1 instead
                 target_chip: TargetChip::ATtiny85,
+                clock_speed: ClockSpeed::MHz8,  // Default to 8MHz for ATtiny85
                 baud_rate: 19200,
                 port: port.to_string(),
+                board_type: BoardType::ArduinoNanoISP,
             }
         } else {
             // Other ports assume Arduino Uno
             Self {
                 programmer: "arduino".to_string(),
                 target_chip: TargetChip::ATmega328P,
+                clock_speed: ClockSpeed::MHz16,  // ATmega328P uses 16MHz
                 baud_rate: 115200,
                 port: port.to_string(),
+                board_type: BoardType::ArduinoUno,
             }
         }
     }
@@ -360,14 +403,22 @@ pub fn upload_avr(hex_file: &Path, config: &UploadConfig) -> UploadResult {
     }));
     output.push_str(&format!("Programmer: {} @ {} baud\n", config.programmer, config.baud_rate));
     
-    let args = vec![
+    let mut args = vec![
         "-v".to_string(),
         format!("-p{}", config.get_mcu_string()),
         format!("-c{}", config.programmer),
         format!("-P{}", config.port),
         format!("-b{}", config.baud_rate),
-        format!("-Uflash:w:{}:i", hex_file.display()),
     ];
+    
+    // Add ATtiny85 specific flags
+    if matches!(config.target_chip, TargetChip::ATtiny85) {
+        // Try without bit clock flag first
+    }
+    
+    args.push(format!("-Uflash:w:{}:i", hex_file.display()));
+    
+    output.push_str(&format!("Running: avrdude {}\n", args.join(" ")));
     
     let upload_result = Command::new("avrdude").args(&args).output();
     

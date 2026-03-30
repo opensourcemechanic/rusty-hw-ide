@@ -4,7 +4,6 @@ mod compiler;
 
 use eframe::egui;
 use hw_hal::{HardwareInfo, Platform, HardwareInterface, debug, test};
-use hw_hal::serial::SerialConnection;
 use hw_ui::{
     AppTheme,
     editor::CodeEditor,
@@ -45,6 +44,11 @@ pub struct HardwareIDE {
     upload_in_progress: bool,
     operation_output: String,
     operation_receiver: Option<std::sync::mpsc::Receiver<String>>,
+    
+    // Detachable window state
+    build_output_detached: bool,
+    serial_monitor_detached: bool,
+    serial_monitor_visible: bool,
 }
 
 impl HardwareIDE {
@@ -55,6 +59,17 @@ impl HardwareIDE {
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
             .init();
+        
+        // Apply theme once at startup to prevent flickering
+        let ctx = cc.egui_ctx.clone();
+        let theme = AppTheme::dark();
+        ctx.set_visuals({
+            let mut visuals = egui::Visuals::dark();
+            visuals.window_fill = theme.background;
+            visuals.panel_fill = theme.surface;
+            visuals.widgets.noninteractive.fg_stroke.color = theme.text;
+            visuals
+        });
 
         // Debug serial ports
         debug::debug_serial_ports();
@@ -91,6 +106,11 @@ impl HardwareIDE {
             upload_in_progress: false,
             operation_output: String::new(),
             operation_receiver: None,
+            
+            // Detachable window state
+            build_output_detached: false,
+            serial_monitor_detached: false,
+            serial_monitor_visible: false, // Start hidden by default
         };
 
         // Load initial example code
@@ -109,24 +129,38 @@ impl HardwareIDE {
     }
 
     fn load_blink_example(&mut self) {
-        let blink_code = r#"/*
- * LED Blink Example for WeMos D1 Mini (ESP8266)
- * Blinks the built-in LED (GPIO2) at 1 Hz
- */
+        // Load LED blink example based on current target
+        let blink_code = if matches!(self.upload_config.target_chip, compiler::TargetChip::ATtiny85) {
+            // ATtiny85 version - no Serial, use pin 0 (PB0/physical pin 5)
+            r#"// LED Blink Example for ATtiny85
+// LED connected to Pin 0 (PB0, physical pin 5)
 
-#define LED_PIN 2  // Built-in LED on WeMos D1 Mini
+#define LED_PIN 0  // Pin 0 = PB0 = physical pin 5
 
 void setup() {
-  // Initialize serial communication
-  Serial.begin(115200);
-  Serial.println("LED Blink Example Starting...");
-  
-  // Set LED pin as output
   pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+  // Turn LED off
+  digitalWrite(LED_PIN, LOW);
+  delay(500);  // Wait 500ms
   
-  // Turn LED on initially
+  // Turn LED on
   digitalWrite(LED_PIN, HIGH);
-  Serial.println("LED turned ON");
+  delay(500);  // Wait 500ms
+}"#
+        } else {
+            // Arduino/ESP version with Serial
+            r#"// LED Blink Example for Arduino/ESP
+// Built-in LED typically on pin 13
+
+#define LED_PIN 13  // Built-in LED on most Arduino boards
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  Serial.begin(115200);
+  Serial.println("LED Blink Example Started!");
 }
 
 void loop() {
@@ -139,14 +173,26 @@ void loop() {
   digitalWrite(LED_PIN, HIGH);
   Serial.println("LED turned ON");
   delay(500);  // Wait 500ms
-}"#;
+}"#
+        };
+
+        let filename = if matches!(self.upload_config.target_chip, compiler::TargetChip::ATtiny85) {
+            "examples/blink_attiny85.cpp"
+        } else {
+            "examples/blink_arduino.cpp"
+        };
 
         self.code_editor = CodeEditor::new_with_code(
             blink_code.to_string(),
             "cpp".to_string(),
         );
-        self.code_editor.file_path = Some("examples/blink_wemos_d1.cpp".to_string());
-        self.status_bar.info("Loaded LED blink example for WeMos D1 Mini");
+        self.code_editor.file_path = Some(filename.to_string());
+        
+        let target_name = match self.upload_config.target_chip {
+            compiler::TargetChip::ATtiny85 => "ATtiny85",
+            compiler::TargetChip::ATmega328P => "Arduino Uno",
+        };
+        self.status_bar.info(&format!("Loaded LED blink example for {}", target_name));
     }
 
     fn show_hardware_selection_dialog(&mut self, ctx: &egui::Context) {
@@ -356,8 +402,12 @@ void loop() {
             }
         };
         
+        // Get current upload config for compilation
+        let target_chip = self.upload_config.target_chip.clone();
+        let clock_speed = self.upload_config.clock_speed.clone();
+        
         std::thread::spawn(move || {
-            let result = compiler::compile_avr(&source_code, &build_dir);
+            let result = compiler::compile_avr(&source_code, &build_dir, target_chip, clock_speed);
             let _ = output_sender.0.send(result.output);
             let _ = output_sender.0.send(if result.success { "COMPILATION_SUCCESS".to_string() } else { "COMPILATION_FAILED".to_string() });
         });
@@ -438,50 +488,70 @@ void loop() {
         
         let mut should_close = false;
         
-        let window = egui::Window::new("Build Output")
+        // Create window configuration
+        let mut window = egui::Window::new("Build Output")
             .collapsible(false)
             .resizable(true)
             .default_width(800.0)
-            .default_height(600.0)
-            .open(&mut self.show_build_output_dialog);
+            .default_height(600.0);
+        
+        if self.build_output_detached {
+            window = window.default_pos(egui::pos2(100.0, 100.0));
+        }
         
         window.show(ctx, |ui| {
-            let title = if self.compile_in_progress {
-                "🔄 Compiling..."
-            } else if self.upload_in_progress {
-                "🔄 Uploading..."
-            } else if self.operation_output.contains("✅") {
-                "✅ Operation Successful"
-            } else {
-                "❌ Operation Failed"
-            };
-            
-            ui.heading(title);
-            ui.add_space(10.0);
-            
-            egui::ScrollArea::vertical()
-                .max_height(500.0)
-                .show(ui, |ui| {
-                    ui.monospace(&self.operation_output);
-                });
-            
-            ui.add_space(10.0);
-            
-            ui.horizontal(|ui| {
-                if ui.button("Copy to Clipboard").clicked() {
-                    ui.output_mut(|o| o.copied_text = self.operation_output.clone());
-                    self.status_bar.info("Output copied to clipboard");
-                }
-                
-                if ui.button("Close").clicked() {
-                    should_close = true;
-                }
-            });
+            self.build_output_dialog_contents(ui, &mut should_close);
         });
         
         if should_close {
             self.show_build_output_dialog = false;
         }
+    }
+    
+    fn build_output_dialog_contents(&mut self, ui: &mut egui::Ui, should_close: &mut bool) {
+        let title = if self.compile_in_progress {
+            "🔄 Compiling..."
+        } else if self.upload_in_progress {
+            "🔄 Uploading..."
+        } else if self.operation_output.contains("✅") {
+            "✅ Operation Successful"
+        } else {
+            "❌ Operation Failed"
+        };
+        
+        ui.heading(title);
+        ui.add_space(10.0);
+        
+        egui::ScrollArea::vertical()
+            .max_height(500.0)
+            .show(ui, |ui| {
+                ui.monospace(&self.operation_output);
+            });
+        
+        ui.add_space(10.0);
+        
+        ui.horizontal(|ui| {
+            if ui.button("Copy to Clipboard").clicked() {
+                ui.output_mut(|o| o.copied_text = self.operation_output.clone());
+                self.status_bar.info("Output copied to clipboard");
+            }
+            
+            if !self.build_output_detached {
+                if ui.button("📎 Detach").clicked() {
+                    self.build_output_detached = true;
+                }
+            } else {
+                if ui.button("📌 Attach").clicked() {
+                    self.build_output_detached = false;
+                }
+            }
+            
+            ui.add_space(10.0);
+            
+            if ui.button("Close").clicked() {
+                *should_close = true;
+            }
+        });
     }
 
     fn show_upload_config_dialog(&mut self, ctx: &egui::Context) {
@@ -508,30 +578,80 @@ void loop() {
                 ui.label(&self.upload_config.port);
             });
             
-            // Target Chip
+            // Board Type
             ui.horizontal(|ui| {
-                ui.label("Target Chip:");
-                let chip_names = vec!["ATmega328P", "ATtiny85"];
-                let mut selected_index = match self.upload_config.target_chip {
-                    compiler::TargetChip::ATmega328P => 0,
-                    compiler::TargetChip::ATtiny85 => 1,
+                ui.label("Board Type:");
+                let board_names = vec!["Arduino Uno", "Arduino Nano (ISP)"];
+                let mut selected_index = match self.upload_config.board_type {
+                    compiler::BoardType::ArduinoUno => 0,
+                    compiler::BoardType::ArduinoNanoISP => 1,
                 };
                 
-                egui::ComboBox::from_label("")
-                    .selected_text(chip_names[selected_index])
+                egui::ComboBox::from_id_source("board_type")
+                    .selected_text(board_names[selected_index])
                     .show_ui(ui, |ui| {
-                        for (i, chip_name) in chip_names.iter().enumerate() {
-                            ui.selectable_value(&mut selected_index, i, *chip_name);
+                        for (i, board_name) in board_names.iter().enumerate() {
+                            ui.selectable_value(&mut selected_index, i, *board_name);
                         }
                     });
                 
-                self.upload_config.target_chip = match selected_index {
-                    0 => compiler::TargetChip::ATmega328P,
-                    1 => compiler::TargetChip::ATtiny85,
-                    _ => compiler::TargetChip::ATmega328P,
+                self.upload_config.board_type = match selected_index {
+                    0 => compiler::BoardType::ArduinoUno,
+                    1 => compiler::BoardType::ArduinoNanoISP,
+                    _ => compiler::BoardType::ArduinoUno,
                 };
+                
+                // Auto-configure based on board type
+                match self.upload_config.board_type {
+                    compiler::BoardType::ArduinoUno => {
+                        self.upload_config.target_chip = compiler::TargetChip::ATmega328P;
+                        self.upload_config.clock_speed = compiler::ClockSpeed::MHz16;
+                        self.upload_config.programmer = "arduino".to_string();
+                        self.upload_config.baud_rate = 115200;
+                    }
+                    compiler::BoardType::ArduinoNanoISP => {
+                        self.upload_config.target_chip = compiler::TargetChip::ATtiny85;
+                        self.upload_config.clock_speed = compiler::ClockSpeed::MHz8;
+                        self.upload_config.programmer = "stk500v1".to_string();
+                        self.upload_config.baud_rate = 19200;
+                    }
+                }
             });
             
+            // Target Chip (read-only, configured by board type)
+            ui.horizontal(|ui| {
+                ui.label("Target Chip:");
+                ui.label(match self.upload_config.target_chip {
+                    compiler::TargetChip::ATmega328P => "ATmega328P",
+                    compiler::TargetChip::ATtiny85 => "ATtiny85",
+                });
+            });
+            
+            // Clock Speed (ATtiny85 only)
+            if matches!(self.upload_config.target_chip, compiler::TargetChip::ATtiny85) {
+                ui.horizontal(|ui| {
+                    ui.label("Clock Speed:");
+                    let speed_names = vec!["1MHz Internal", "8MHz Internal", "16MHz External"];
+                    let mut selected_index = match self.upload_config.clock_speed {
+                        compiler::ClockSpeed::MHz1 => 0,
+                        compiler::ClockSpeed::MHz8 => 1,
+                        compiler::ClockSpeed::MHz16 => 2,
+                    };
+                    egui::ComboBox::from_id_source("clock_speed")
+                        .selected_text(speed_names[selected_index])
+                        .show_ui(ui, |ui| {
+                            for (i, name) in speed_names.iter().enumerate() {
+                                ui.selectable_value(&mut selected_index, i, *name);
+                            }
+                        });
+                    self.upload_config.clock_speed = match selected_index {
+                        0 => compiler::ClockSpeed::MHz1,
+                        1 => compiler::ClockSpeed::MHz8,
+                        _ => compiler::ClockSpeed::MHz16,
+                    };
+                });
+            }
+
             // Programmer
             ui.horizontal(|ui| {
                 ui.label("Programmer:");
@@ -634,16 +754,26 @@ void loop() {
 
 impl eframe::App for HardwareIDE {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Set theme colors
-        let mut visuals = egui::Visuals::dark();
-        visuals.window_fill = self.theme.background;
-        visuals.panel_fill = self.theme.surface;
-        visuals.widgets.noninteractive.fg_stroke.color = self.theme.text;
-        ctx.set_visuals(visuals);
+        // Only apply theme once at startup to prevent flickering
+        // Theme changes are now handled more efficiently
+        
+        // Optimize repaints - only request continuous repaint when absolutely necessary
+        let needs_repaint = self.compile_in_progress 
+            || self.upload_in_progress 
+            || (self.serial_monitor.enabled && self.hardware_panel.is_connected());
+            
+        if needs_repaint {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         // Top panel - Menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             self.menu_bar.show(ui);
+        });
+
+        // Bottom panel - Status bar (must be before side panels and CentralPanel)
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            self.status_bar.show(ui, &self.theme);
         });
 
         // Handle menu bar actions and hardware detection (OUTSIDE panel closures)
@@ -715,6 +845,25 @@ impl eframe::App for HardwareIDE {
             self.show_upload_config_dialog = true;
             self.menu_bar.reset_action_flags();
         }
+        
+        if self.menu_bar.toggle_serial_monitor {
+            self.serial_monitor_visible = !self.serial_monitor_visible;
+            self.menu_bar.reset_action_flags();
+        }
+
+        // Handle hardware panel actions
+        if self.hardware_panel.disconnect_clicked {
+            if self.hardware_panel.connection.is_connected() {
+                self.hardware_panel.connection.disconnect().ok();
+                self.status_bar.info("Hardware disconnected");
+            }
+            self.hardware_panel.reset_action_flags();
+        }
+        
+        if self.hardware_panel.configure_clicked {
+            self.hardware_panel.show_config = !self.hardware_panel.show_config;
+            self.hardware_panel.reset_action_flags();
+        }
 
         // Show dialogs
         if self.show_hardware_dialog {
@@ -736,7 +885,6 @@ impl eframe::App for HardwareIDE {
             }
         }
 
-        // Main layout with fixed panel widths
         // Left panel - Hardware (fixed 300px width)
         egui::SidePanel::left("hardware_panel")
             .resizable(false)
@@ -750,16 +898,79 @@ impl eframe::App for HardwareIDE {
                 }
             });
         
-        // Right panel - Serial Monitor (fixed 300px width)
-        egui::SidePanel::right("serial_panel")
-            .resizable(false)
-            .exact_width(300.0)
-            .show(ctx, |ui| {
+        // Right panel - Serial Monitor (fixed 380px width) - only show if visible and not detached
+        if self.serial_monitor_visible && !self.serial_monitor_detached {
+            egui::SidePanel::right("serial_panel")
+                .resizable(false)
+                .exact_width(380.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Serial Monitor");
+                        ui.add_space(10.0);
+                        
+                        // Options checkboxes moved to header
+                        ui.checkbox(&mut self.serial_monitor.auto_scroll, "Auto");
+                        ui.checkbox(&mut self.serial_monitor.show_timestamps, "Time");
+                        ui.checkbox(&mut self.serial_monitor.hex_mode, "Hex");
+                        
+                        ui.add_space(10.0);
+                        if ui.button("📎 Detach").clicked() {
+                            self.serial_monitor_detached = true;
+                        }
+                    });
+                    ui.separator();
+                    self.serial_monitor.show(ui, &self.theme, &mut self.hardware_panel.connection);
+                });
+        }
+
+        // Show detached serial monitor window if enabled
+        let mut should_attach = false;
+        if self.serial_monitor_visible && self.serial_monitor_detached {
+            let window = egui::Window::new("Serial Monitor")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(400.0)
+                .default_height(600.0)
+                .open(&mut self.serial_monitor_detached)
+                .default_pos(egui::pos2(500.0, 100.0));
+            
+            window.show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Serial Monitor");
+                    ui.add_space(10.0);
+                    if ui.button("📌 Attach").clicked() {
+                        should_attach = true;
+                    }
+                });
+                ui.separator();
                 self.serial_monitor.show(ui, &self.theme, &mut self.hardware_panel.connection);
             });
+        }
+        
+        if should_attach {
+            self.serial_monitor_detached = false;
+        }
 
         // Center panel - Code Editor (takes remaining space)
         egui::CentralPanel::default().show(ctx, |ui| {
+            // Calculate available width and constrain to 90-125 characters
+            let available_width = ui.available_width();
+            let char_width = 6.0; // Approximate monospace character width
+            let min_width = 90.0 * char_width; // 540px
+            let max_width = 125.0 * char_width; // 750px
+            
+            let target_width = if self.serial_monitor_visible && !self.serial_monitor_detached {
+                // When Serial Monitor is active, limit to 90 characters
+                available_width.min(max_width).min(min_width)
+            } else {
+                // When Serial Monitor is hidden, allow up to 125 characters
+                available_width.min(max_width)
+            };
+            
+            // Set the editor width by constraining the available space
+            ui.set_max_width(target_width);
+            ui.set_min_width(target_width);
+            
             if self.code_editor.show(ui, &self.theme) {
                 self.status_bar.warning("Code modified - remember to save");
             }
@@ -768,13 +979,10 @@ impl eframe::App for HardwareIDE {
         // Check for async operation results
         self.check_operation_results();
         
-        // Update serial monitor
-        self.update_serial_monitor();
-
-        // Bottom panel - Status bar
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            self.status_bar.show(ui, &self.theme);
-        });
+        // Only update serial monitor when visible and connected
+        if self.serial_monitor_visible {
+            self.update_serial_monitor();
+        }
 
         // Handle keyboard shortcuts
         if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.ctrl) {
