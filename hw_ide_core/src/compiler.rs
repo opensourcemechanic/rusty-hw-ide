@@ -20,7 +20,43 @@ pub struct UploadResult {
 
 /// Find Arduino core library paths
 fn find_arduino_core() -> Result<(PathBuf, PathBuf), String> {
-    // Check LOCALAPPDATA for Arduino15 (Arduino IDE 1.6+)
+    // First try Linux paths
+    #[cfg(target_os = "linux")]
+    {
+        // Check common Linux Arduino IDE installation paths
+        let linux_paths = vec![
+            PathBuf::from("/home").join(env::var("USER").unwrap_or_else(|_| "user".to_string())).join(".arduino15"),
+            PathBuf::from("/usr").join("share").join("arduino"),
+            PathBuf::from("/opt").join("arduino"),
+            PathBuf::from(env::var("HOME").unwrap_or_else(|_| "".to_string())).join(".arduino15"),
+        ];
+        
+        for arduino15 in linux_paths {
+            if arduino15.exists() {
+                println!("Checking Arduino IDE path: {}", arduino15.display());
+                
+                // Find AVR core version
+                let avr_base = arduino15.join("packages").join("arduino").join("hardware").join("avr");
+                
+                if avr_base.exists() {
+                    if let Ok(entries) = fs::read_dir(&avr_base) {
+                        for entry in entries.flatten() {
+                            let version_path = entry.path();
+                            let core_path = version_path.join("cores").join("arduino");
+                            let variant_path = version_path.join("variants").join("standard");
+                            
+                            if core_path.exists() && variant_path.exists() {
+                                println!("Found Arduino core: {}", core_path.display());
+                                return Ok((core_path, variant_path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Check LOCALAPPDATA for Arduino15 (Arduino IDE 1.6+ on Windows)
     if let Ok(localappdata) = env::var("LOCALAPPDATA") {
         let arduino15 = PathBuf::from(localappdata).join("Arduino15");
         
@@ -44,8 +80,9 @@ fn find_arduino_core() -> Result<(PathBuf, PathBuf), String> {
         }
     }
     
-    Err(format!("Arduino core libraries not found.\n\nLOCALAPPDATA: {:?}\n\nPlease install Arduino IDE from: https://www.arduino.cc/en/software\n\nAfter installation, the IDE will automatically download the AVR core libraries.", 
-        env::var("LOCALAPPDATA").unwrap_or_else(|_| "Not set".to_string())))
+    Err(format!("Arduino core libraries not found.\n\nLOCALAPPDATA: {:?}\nHOME: {:?}\n\nPlease install Arduino IDE from: https://www.arduino.cc/en/software\n\nAfter installation, the IDE will automatically download the AVR core libraries.\n\nFor Linux, you can also install via:\nsudo apt update && sudo apt install arduino", 
+        env::var("LOCALAPPDATA").unwrap_or_else(|_| "Not set".to_string()),
+        env::var("HOME").unwrap_or_else(|_| "Not set".to_string())))
 }
 
 /// Compile Arduino code using official Arduino core
@@ -363,11 +400,27 @@ pub struct UploadConfig {
 
 impl UploadConfig {
     pub fn detect_from_port(port: &str) -> Self {
-        // Default detection logic - assume Arduino Uno/Nano for direct upload
-        // User can change to ATtiny85 ISP mode via Upload Configuration
+        // Default detection logic for Arduino boards
         let (programmer, baud_rate) = match port {
-            "COM8" => ("arduino".to_string(), 57600),     // Arduino programmer with CH340 baud rate
-            _ => ("arduino".to_string(), 115200),         // Standard Arduino
+            // Windows CH340 Nano clones
+            port if port.contains("COM8") => ("arduino".to_string(), 57600),
+            // Linux USB serial devices (Nano clones)
+            port if port.contains("ttyUSB") || port.contains("ttyACM") => {
+                // For Nano clones, use 57600 baud rate regardless of chip type
+                // Try different programmers based on common chip types
+                match port {
+                    // FTDI chips (common in older Nano clones)
+                    port if port.contains("ttyUSB0") => ("stk500v1".to_string(), 57600),
+                    // CH340 chips (common in newer Nano clones)  
+                    port if port.contains("ttyUSB") => ("arduino".to_string(), 57600),
+                    // USB CDC devices (native Arduino boards)
+                    port if port.contains("ttyACM") => ("arduino".to_string(), 57600),
+                    // Fallback
+                    _ => ("arduino".to_string(), 57600),
+                }
+            },
+            // Standard Arduino (original boards)
+            _ => ("arduino".to_string(), 115200),
         };
         
         Self {
@@ -378,6 +431,28 @@ impl UploadConfig {
             port: port.to_string(),
             board_type: BoardType::ArduinoUno,
         }
+    }
+    
+    /// Create alternative configurations for troubleshooting upload issues
+    pub fn get_alternatives(&self) -> Vec<Self> {
+        let mut alternatives = Vec::new();
+        
+        // Different programmers to try for CH340/FTDI Nano clones
+        let programmers = vec![
+            ("arduino".to_string(), "Standard Arduino programmer"),
+            ("stk500v1".to_string(), "STK500v1 (good for FTDI)"),
+            ("usbasp".to_string(), "USBasp (alternative)"),
+        ];
+        
+        for (prog, desc) in programmers {
+            if prog != self.programmer {
+                let mut alt_config = self.clone();
+                alt_config.programmer = prog;
+                alternatives.push(alt_config);
+            }
+        }
+        
+        alternatives
     }
     
     pub fn get_mcu_string(&self) -> &'static str {

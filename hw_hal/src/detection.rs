@@ -7,6 +7,7 @@ use serialport::SerialPortInfo;
 /// Detects all available serial ports and attempts to identify connected hardware
 pub fn detect_hardware() -> Result<Vec<HardwareInfo>> {
     let mut hardware_list = Vec::new();
+    let mut seen_ports = std::collections::HashSet::new();
     
     println!("=== Hardware Detection Debug ===");
     
@@ -15,9 +16,17 @@ pub fn detect_hardware() -> Result<Vec<HardwareInfo>> {
         println!("Found {} ports from serialport library", ports.len());
         for (i, port) in ports.iter().enumerate() {
             println!("Analyzing port {}: {}", i + 1, port.port_name);
+            
+            // Skip if we've already seen this port
+            if seen_ports.contains(&port.port_name) {
+                println!("⚠ Skipping duplicate port: {}", port.port_name);
+                continue;
+            }
+            
             if let Some(hw_info) = analyze_port(&port) {
                 println!("✓ Detected: {} on {}", hw_info.name, hw_info.port);
                 hardware_list.push(hw_info);
+                seen_ports.insert(port.port_name.clone());
             } else {
                 println!("✗ No hardware detected for {}", port.port_name);
             }
@@ -44,23 +53,116 @@ pub fn detect_hardware() -> Result<Vec<HardwareInfo>> {
         }
     }
     
-    // On non-Windows (WSL), manually check WSL COM ports (ttyS*) that might not be detected by serialport
-    #[cfg(not(target_os = "windows"))]
+    // On Linux, check for USB serial devices and udev information
+    #[cfg(target_os = "linux")]
     {
-        for i in 0..8 {
-            let port_name = format!("/dev/ttyS{}", i);
-            if std::path::Path::new(&port_name).exists() {
-                // Try to test if we can access the port
-                if test_port_access(&port_name) {
-                    if let Some(hw_info) = analyze_wsl_port(&port_name) {
-                        hardware_list.push(hw_info);
-                    }
-                }
-            }
-        }
+        println!("=== Checking Linux USB Serial Devices ===");
+        
+        // Check for common USB serial device paths
+        check_native_usb_devices(&mut hardware_list, &mut seen_ports);
+        
+        // Also check udev for Arduino devices
+        check_udev_devices(&mut hardware_list);
     }
     
     Ok(hardware_list)
+}
+
+/// Check for native USB serial devices (not COM port forwarded)
+#[cfg(target_os = "linux")]
+fn check_native_usb_devices(hardware_list: &mut Vec<HardwareInfo>, seen_ports: &mut std::collections::HashSet<String>) {
+    println!("=== Checking Native USB Serial Devices ===");
+    
+    // Common USB serial device paths in Linux
+    let usb_paths = vec![
+        "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3",
+        "/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2", "/dev/ttyACM3",
+    ];
+    
+    for path in usb_paths {
+        // Skip if we've already seen this port
+        if seen_ports.contains(path) {
+            println!("  ⚠ Skipping already detected port: {}", path);
+            continue;
+        }
+        
+        if std::path::Path::new(path).exists() {
+            println!("  Found USB device: {}", path);
+            
+            if test_port_access(path) {
+                println!("  ✓ Can access {}", path);
+                
+                // Try to get more info about the device
+                if let Ok(ports) = serialport::available_ports() {
+                    if let Some(port_info) = ports.iter().find(|p| p.port_name == path) {
+                        if let Some(hw_info) = analyze_port(port_info) {
+                            hardware_list.push(hw_info);
+                            seen_ports.insert(path.to_string());
+                        }
+                    } else {
+                        // Fallback for ports not detected by serialport
+                        let hw_info = HardwareInfo {
+                            name: "USB Serial Device".to_string(),
+                            platform: Platform::AVR,
+                            port: path.to_string(),
+                            baud_rate: 9600,
+                            chip_id: None,
+                            description: Some("Native USB Serial".to_string()),
+                        };
+                        hardware_list.push(hw_info);
+                        seen_ports.insert(path.to_string());
+                    }
+                }
+            } else {
+                println!("  ✗ Cannot access {}", path);
+            }
+        }
+    }
+}
+
+/// Check udev for Arduino devices on Linux
+#[cfg(target_os = "linux")]
+fn check_udev_devices(hardware_list: &mut Vec<HardwareInfo>) {
+    println!("=== Checking udev for Arduino Devices ===");
+    
+    // Check for CH340/CH341 devices specifically
+    if let Ok(output) = std::process::Command::new("sh")
+        .args(&["-c", "dmesg | grep -i 'ch340\\|ch341\\|arduino'"])
+        .output()
+    {
+        let dmesg_info = String::from_utf8_lossy(&output.stdout);
+        if !dmesg_info.trim().is_empty() {
+            println!("Arduino-related kernel messages:");
+            println!("{}", dmesg_info);
+        }
+    }
+    
+    // Check if ch340 driver is loaded
+    if let Ok(output) = std::process::Command::new("sh")
+        .args(&["-c", "lsmod | grep ch340"])
+        .output()
+    {
+        let lsmod_info = String::from_utf8_lossy(&output.stdout);
+        if !lsmod_info.trim().is_empty() {
+            println!("CH340 driver loaded: {}", lsmod_info);
+        } else {
+            println!("CH340 driver not loaded - this may be the issue");
+        }
+    }
+    
+    // Check for USB devices with Arduino-related VID/PID
+    if let Ok(output) = std::process::Command::new("sh")
+        .args(&["-c", "lsusb | grep -i '1a86\\|0403\\|10c4'"])
+        .output()
+    {
+        let usb_info = String::from_utf8_lossy(&output.stdout);
+        if !usb_info.trim().is_empty() {
+            println!("Found potential Arduino USB devices:");
+            println!("{}", usb_info);
+        } else {
+            println!("No Arduino USB devices found with lsusb");
+        }
+    }
 }
 
 /// Tests if we can access a port
@@ -93,21 +195,6 @@ fn analyze_windows_com_port(port_name: &str) -> Option<HardwareInfo> {
         baud_rate,
         chip_id: None,
         description: Some(format!("Windows COM Port - {}", port_name)),
-    })
-}
-
-/// Analyzes WSL COM ports specifically (for WSL builds)
-#[cfg(not(target_os = "windows"))]
-fn analyze_wsl_port(port_name: &str) -> Option<HardwareInfo> {
-    // For WSL, we assume ttyS ports are forwarded Windows COM ports
-    // Default to AVR/Arduino since that's most common for CH341 chips
-    Some(HardwareInfo {
-        name: "Arduino/AVR Device (WSL)".to_string(),
-        platform: Platform::AVR,
-        port: port_name.to_string(),
-        baud_rate: 9600, // Arduino default
-        chip_id: None,
-        description: Some("WSL COM Port Forward".to_string()),
     })
 }
 
@@ -164,6 +251,40 @@ fn identify_known_device(port_name: &str, vid: u16, pid: u16) -> Option<(Platfor
     // Windows COM ports - identify by VID/PID
     if port_lower.contains("com") {
         println!("    Windows COM port detected");
+        match (vid, pid) {
+            // FTDI devices (common for Arduino clones)
+            (0x0403, 0x6001) => {
+                println!("    ✓ Matched FTDI Arduino");
+                Some((Platform::AVR, "Arduino (FTDI)".to_string()))
+            },
+            // Silicon Labs CP210x (common for ESP32/ESP8266)
+            (0x10c4, 0xea60) => {
+                println!("    ✓ Matched WeMos D1 Mini Pro");
+                Some((Platform::ESP8266, "WeMos D1 Mini Pro".to_string()))
+            },
+            // CH340/CH341 (common Arduino clones)
+            (0x1a86, 0x7523) => {
+                println!("    ✓ Matched CH340 Arduino");
+                Some((Platform::AVR, "Arduino (CH340)".to_string()))
+            },
+            // Other common patterns
+            (0x10c4, _) => {
+                println!("    ✓ Matched Silicon Labs (ESP32)");
+                Some((Platform::ESP32, "ESP32 Dev Board".to_string()))
+            },
+            (0x0403, _) => {
+                println!("    ✓ Matched FTDI Device");
+                Some((Platform::AVR, "FTDI Device".to_string()))
+            },
+            _ => {
+                println!("    ✗ No VID/PID match found");
+                Some((Platform::AVR, "Unknown USB Device".to_string()))
+            },
+        }
+    }
+    // Linux USB serial devices
+    else if port_lower.contains("ttyusb") || port_lower.contains("ttyacm") {
+        println!("    Linux USB serial port detected");
         match (vid, pid) {
             // FTDI devices (common for Arduino clones)
             (0x0403, 0x6001) => {

@@ -9,3 +9,6 @@ enabled=true
 [wsl2]
 # Enable USB interop
 usbip=true
+# Forward Windows COM ports to WSL
+# Replace COM8 with your Arduino's actual COM port from Windows Device Manager
+com1=\\\\.\\COM8

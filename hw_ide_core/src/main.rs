@@ -1044,9 +1044,11 @@ fn main() -> Result<(), eframe::Error> {
     // Configure window options
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([2000.0, 900.0])  // Even more width
-            .with_min_inner_size([1600.0, 700.0]) // Larger minimum size
-            .with_title("Hardware-Aware IDE"),
+            .with_inner_size([1400.0, 800.0])  // Reduced default size
+            .with_min_inner_size([1200.0, 600.0]) // Reasonable minimum size
+            .with_title("Hardware-Aware IDE")
+            .with_decorations(true)   // Ensure window decorations are shown
+            .with_maximized(false),   // Don't start maximized
         ..Default::default()
     };
 
