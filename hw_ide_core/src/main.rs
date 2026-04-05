@@ -116,6 +116,9 @@ impl HardwareIDE {
         // Load initial example code
         app.load_blink_example();
 
+        // Debug serial port detection
+        hw_hal::debug::debug_serial_ports();
+        
         // Detect hardware on startup
         tracing::info!("=== About to call detect_hardware() ===");
         if let Ok(hardware) = hw_hal::detection::detect_hardware() {
@@ -129,10 +132,11 @@ impl HardwareIDE {
     }
 
     fn load_blink_example(&mut self) {
-        // Load LED blink example based on current target
-        let blink_code = if matches!(self.upload_config.target_chip, compiler::TargetChip::ATtiny85) {
-            // ATtiny85 version - no Serial, use pin 0 (PB0/physical pin 5)
-            r#"// LED Blink Example for ATtiny85
+        // Load LED blink example based on current board configuration
+        let blink_code = match (&self.upload_config.target_chip, &self.upload_config.board_type) {
+            (compiler::TargetChip::ATtiny85, _) => {
+                // ATtiny85 version - no Serial, use pin 0 (PB0/physical pin 5)
+                r#"// LED Blink Example for ATtiny85
 // LED connected to Pin 0 (PB0, physical pin 5)
 
 #define LED_PIN 0  // Pin 0 = PB0 = physical pin 5
@@ -150,36 +154,48 @@ void loop() {
   digitalWrite(LED_PIN, HIGH);
   delay(500);  // Wait 500ms
 }"#
-        } else {
-            // Arduino/ESP version with Serial
-            r#"// LED Blink Example for Arduino/ESP
-// Built-in LED typically on pin 13
-
-#define LED_PIN 13  // Built-in LED on most Arduino boards
+            }
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoNanoISP) => {
+                // Arduino Nano as ISP programmer - don't use this for direct upload
+                r#"// Arduino Nano ISP Programmer
+// This board is configured as ISP programmer
+// Select "Arduino Uno" board type for direct Nano upload
 
 void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  Serial.begin(115200);
-  Serial.println("LED Blink Example Started!");
+  // Arduino Nano is configured as ISP programmer
 }
 
 void loop() {
-  // Turn LED off
-  digitalWrite(LED_PIN, LOW);
-  Serial.println("LED turned OFF");
-  delay(500);  // Wait 500ms
-  
-  // Turn LED on
-  digitalWrite(LED_PIN, HIGH);
-  Serial.println("LED turned ON");
-  delay(500);  // Wait 500ms
+  // ISP programmer mode - no user code
 }"#
+            }
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoUno) => {
+                // Arduino Nano/Uno direct upload version - no Serial
+                r#"// LED Blink Example for Arduino Nano/Uno
+// Built-in LED on pin 13 (L LED on Arduino Nano)
+// No Serial dependencies - just pure LED blinking
+
+#define LED_PIN 13  // Built-in LED (L) on Arduino Nano
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  // Built-in LED should blink after upload
+}
+
+void loop() {
+  digitalWrite(LED_PIN, HIGH);  // Turn LED ON
+  delay(500);                  // Wait 500ms
+  
+  digitalWrite(LED_PIN, LOW);   // Turn LED OFF
+  delay(500);                  // Wait 500ms
+}"#
+            }
         };
 
-        let filename = if matches!(self.upload_config.target_chip, compiler::TargetChip::ATtiny85) {
-            "examples/blink_attiny85.cpp"
-        } else {
-            "examples/blink_arduino.cpp"
+        let filename = match (&self.upload_config.target_chip, &self.upload_config.board_type) {
+            (compiler::TargetChip::ATtiny85, _) => "examples/blink_attiny85.cpp",
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoNanoISP) => "examples/arduino_nano_isp.cpp",
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoUno) => "examples/arduino_nano_blink.cpp",
         };
 
         self.code_editor = CodeEditor::new_with_code(
@@ -188,9 +204,10 @@ void loop() {
         );
         self.code_editor.file_path = Some(filename.to_string());
         
-        let target_name = match self.upload_config.target_chip {
-            compiler::TargetChip::ATtiny85 => "ATtiny85",
-            compiler::TargetChip::ATmega328P => "Arduino Uno",
+        let target_name = match (&self.upload_config.target_chip, &self.upload_config.board_type) {
+            (compiler::TargetChip::ATtiny85, _) => "ATtiny85",
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoNanoISP) => "Arduino Nano (ISP)",
+            (compiler::TargetChip::ATmega328P, compiler::BoardType::ArduinoUno) => "Arduino Nano (Direct)",
         };
         self.status_bar.info(&format!("Loaded LED blink example for {}", target_name));
     }
@@ -317,7 +334,8 @@ void loop() {
             ui.add_space(10.0);
 
             let examples = vec![
-                ("LED Blink", "Basic LED blinking example", "esp8266"),
+                ("LED Blink", "Basic LED blinking example", "avr"),
+                ("Arduino Nano Blink", "Arduino Nano built-in LED test", "avr"),
                 ("Serial Communication", "Serial input/output example", "esp8266"),
                 ("WiFi Scanner", "WiFi network scanning", "esp8266"),
                 ("Web Server", "Simple HTTP server", "esp8266"),
@@ -337,6 +355,7 @@ void loop() {
                         if ui.button("Load").clicked() {
                             match name {
                                 "LED Blink" => load_blink = true,
+                                "Arduino Nano Blink" => load_blink = true,
                                 _ => (), // Would need to set a message flag here
                             }
                             should_close = true;
@@ -462,6 +481,8 @@ void loop() {
         let hardware_info = self.hardware_panel.selected_hardware.clone();
         let output_sender = std::sync::mpsc::channel::<String>();
         let receiver = output_sender.1;
+        
+        self.operation_output.push_str(&format!("Starting upload thread with config: {:?}\n", upload_config));
         
         std::thread::spawn(move || {
             let result = compiler::upload_avr(&hex_file_clone, &upload_config);
@@ -601,13 +622,12 @@ void loop() {
                     _ => compiler::BoardType::ArduinoUno,
                 };
                 
-                // Auto-configure based on board type
+                // Auto-configure based on board type (but preserve manual overrides)
                 match self.upload_config.board_type {
                     compiler::BoardType::ArduinoUno => {
                         self.upload_config.target_chip = compiler::TargetChip::ATmega328P;
                         self.upload_config.clock_speed = compiler::ClockSpeed::MHz16;
-                        self.upload_config.programmer = "arduino".to_string();
-                        self.upload_config.baud_rate = 115200;
+                        // Don't overwrite programmer and baud_rate - let user choose
                     }
                     compiler::BoardType::ArduinoNanoISP => {
                         self.upload_config.target_chip = compiler::TargetChip::ATtiny85;
@@ -652,18 +672,32 @@ void loop() {
                 });
             }
 
-            // Programmer
+            // Programmer with presets
             ui.horizontal(|ui| {
                 ui.label("Programmer:");
                 ui.text_edit_singleline(&mut self.upload_config.programmer);
+                
+                if ui.button("arduino").clicked() {
+                    self.upload_config.programmer = "arduino".to_string();
+                }
+                if ui.button("stk500v1").clicked() {
+                    self.upload_config.programmer = "stk500v1".to_string();
+                }
             });
             
-            // Baud Rate
+            // Baud Rate with presets
             ui.horizontal(|ui| {
                 ui.label("Baud Rate:");
                 ui.add(egui::DragValue::new(&mut self.upload_config.baud_rate)
                     .speed(1000)
                     .clamp_range(300..=115200));
+                
+                if ui.button("57600").clicked() {
+                    self.upload_config.baud_rate = 57600;
+                }
+                if ui.button("115200").clicked() {
+                    self.upload_config.baud_rate = 115200;
+                }
             });
             
             ui.add_space(10.0);
@@ -855,6 +889,7 @@ impl eframe::App for HardwareIDE {
         if self.hardware_panel.disconnect_clicked {
             if self.hardware_panel.connection.is_connected() {
                 self.hardware_panel.connection.disconnect().ok();
+                self.hardware_panel.selected_hardware = None;
                 self.status_bar.info("Hardware disconnected");
             }
             self.hardware_panel.reset_action_flags();

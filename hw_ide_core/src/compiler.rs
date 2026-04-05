@@ -28,21 +28,24 @@ fn find_arduino_core() -> Result<(PathBuf, PathBuf), String> {
             // Find AVR core version
             let avr_base = arduino15.join("packages").join("arduino").join("hardware").join("avr");
             
-            if let Ok(entries) = fs::read_dir(&avr_base) {
-                for entry in entries.flatten() {
-                    let version_path = entry.path();
-                    let core_path = version_path.join("cores").join("arduino");
-                    let variant_path = version_path.join("variants").join("standard");
-                    
-                    if core_path.exists() && variant_path.exists() {
-                        return Ok((core_path, variant_path));
+            if avr_base.exists() {
+                if let Ok(entries) = fs::read_dir(&avr_base) {
+                    for entry in entries.flatten() {
+                        let version_path = entry.path();
+                        let core_path = version_path.join("cores").join("arduino");
+                        let variant_path = version_path.join("variants").join("standard");
+                        
+                        if core_path.exists() && variant_path.exists() {
+                            return Ok((core_path, variant_path));
+                        }
                     }
                 }
             }
         }
     }
     
-    Err("Arduino core libraries not found.\n\nPlease install Arduino IDE from: https://www.arduino.cc/en/software\n\nAfter installation, the IDE will automatically download the AVR core libraries.".to_string())
+    Err(format!("Arduino core libraries not found.\n\nLOCALAPPDATA: {:?}\n\nPlease install Arduino IDE from: https://www.arduino.cc/en/software\n\nAfter installation, the IDE will automatically download the AVR core libraries.", 
+        env::var("LOCALAPPDATA").unwrap_or_else(|_| "Not set".to_string())))
 }
 
 /// Compile Arduino code using official Arduino core
@@ -360,27 +363,20 @@ pub struct UploadConfig {
 
 impl UploadConfig {
     pub fn detect_from_port(port: &str) -> Self {
-        // Default detection logic
-        if port.contains("COM8") {
-            // COM8 is Arduino Nano as ISP for ATtiny85
-            Self {
-                programmer: "stk500v1".to_string(),  // Try stk500v1 instead
-                target_chip: TargetChip::ATtiny85,
-                clock_speed: ClockSpeed::MHz8,  // Default to 8MHz for ATtiny85
-                baud_rate: 19200,
-                port: port.to_string(),
-                board_type: BoardType::ArduinoNanoISP,
-            }
-        } else {
-            // Other ports assume Arduino Uno
-            Self {
-                programmer: "arduino".to_string(),
-                target_chip: TargetChip::ATmega328P,
-                clock_speed: ClockSpeed::MHz16,  // ATmega328P uses 16MHz
-                baud_rate: 115200,
-                port: port.to_string(),
-                board_type: BoardType::ArduinoUno,
-            }
+        // Default detection logic - assume Arduino Uno/Nano for direct upload
+        // User can change to ATtiny85 ISP mode via Upload Configuration
+        let (programmer, baud_rate) = match port {
+            "COM8" => ("arduino".to_string(), 57600),     // Arduino programmer with CH340 baud rate
+            _ => ("arduino".to_string(), 115200),         // Standard Arduino
+        };
+        
+        Self {
+            programmer,
+            target_chip: TargetChip::ATmega328P,
+            clock_speed: ClockSpeed::MHz16,  // ATmega328P uses 16MHz
+            baud_rate,
+            port: port.to_string(),
+            board_type: BoardType::ArduinoUno,
         }
     }
     
@@ -401,7 +397,10 @@ pub fn upload_avr(hex_file: &Path, config: &UploadConfig) -> UploadResult {
         TargetChip::ATmega328P => "ATmega328P",
         TargetChip::ATtiny85 => "ATtiny85",
     }));
-    output.push_str(&format!("Programmer: {} @ {} baud\n", config.programmer, config.baud_rate));
+    output.push_str(&format!("Programmer: {}\n", config.programmer));
+    output.push_str(&format!("Baud rate: {}\n", config.baud_rate));
+    output.push_str(&format!("Board Type: {:?}\n", config.board_type));
+    output.push_str(&format!("Clock Speed: {:?}\n", config.clock_speed));
     
     let mut args = vec![
         "-v".to_string(),

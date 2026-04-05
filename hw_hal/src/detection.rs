@@ -28,14 +28,33 @@ pub fn detect_hardware() -> Result<Vec<HardwareInfo>> {
     
     println!("Total hardware detected: {}", hardware_list.len());
     
-    // Then manually check WSL COM ports (ttyS*) that might not be detected by serialport
-    for i in 0..8 {
-        let port_name = format!("/dev/ttyS{}", i);
-        if std::path::Path::new(&port_name).exists() {
-            // Try to test if we can access the port
+    // On Windows, manually check common COM ports that might not be detected
+    #[cfg(target_os = "windows")]
+    {
+        for i in 1..=20 {
+            let port_name = format!("COM{}", i);
             if test_port_access(&port_name) {
-                if let Some(hw_info) = analyze_wsl_port(&port_name) {
+                println!("✓ Found accessible COM port: {}", port_name);
+                if let Some(hw_info) = analyze_windows_com_port(&port_name) {
                     hardware_list.push(hw_info);
+                }
+            } else {
+                println!("✗ COM{} does not exist or is inaccessible", i);
+            }
+        }
+    }
+    
+    // On non-Windows (WSL), manually check WSL COM ports (ttyS*) that might not be detected by serialport
+    #[cfg(not(target_os = "windows"))]
+    {
+        for i in 0..8 {
+            let port_name = format!("/dev/ttyS{}", i);
+            if std::path::Path::new(&port_name).exists() {
+                // Try to test if we can access the port
+                if test_port_access(&port_name) {
+                    if let Some(hw_info) = analyze_wsl_port(&port_name) {
+                        hardware_list.push(hw_info);
+                    }
                 }
             }
         }
@@ -54,7 +73,31 @@ fn test_port_access(port_name: &str) -> bool {
     }
 }
 
-/// Analyzes WSL COM ports specifically
+/// Analyzes Windows COM ports specifically
+#[cfg(target_os = "windows")]
+fn analyze_windows_com_port(port_name: &str) -> Option<HardwareInfo> {
+    println!("  analyze_windows_com_port: {}", port_name);
+    
+    // For Windows COM ports, default to Arduino/AVR since that's most common
+    // But try to be more specific based on port number
+    let (name, baud_rate) = match port_name {
+        "COM8" => ("Arduino Nano CH340 (COM8)".to_string(), 57600), // CH340 specific settings
+        "COM3" => ("Arduino Uno (COM3)".to_string(), 115200),
+        _ => ("Arduino/AVR Device".to_string(), 115200),
+    };
+    
+    Some(HardwareInfo {
+        name,
+        platform: Platform::AVR,
+        port: port_name.to_string(),
+        baud_rate,
+        chip_id: None,
+        description: Some(format!("Windows COM Port - {}", port_name)),
+    })
+}
+
+/// Analyzes WSL COM ports specifically (for WSL builds)
+#[cfg(not(target_os = "windows"))]
 fn analyze_wsl_port(port_name: &str) -> Option<HardwareInfo> {
     // For WSL, we assume ttyS ports are forwarded Windows COM ports
     // Default to AVR/Arduino since that's most common for CH341 chips
